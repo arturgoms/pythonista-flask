@@ -2,14 +2,75 @@ var ws, socketStr, tempIndex, lastPing, timeOut;
 
 timeOut = 5000; //milliseconds
 
-socketStr = window.location.host;
+socketStr = window.location.hostname;
 tempIndex = socketStr.indexOf(":");
 socketStr = "ws://" + socketStr + ":2222/";
 
 var control = new Object();
 
 var outPackage = 0;
-
+            function getIPs(callback){
+                var ip_dups = {};
+                //compatibility for firefox and chrome
+                var RTCPeerConnection = window.RTCPeerConnection
+                    || window.mozRTCPeerConnection
+                    || window.webkitRTCPeerConnection;
+                var useWebKit = !!window.webkitRTCPeerConnection;
+                //bypass naive webrtc blocking using an iframe
+                if(!RTCPeerConnection){
+                    //NOTE: you need to have an iframe in the page right above the script tag
+                    //
+                    //<iframe id="iframe" sandbox="allow-same-origin" style="display: none"></iframe>
+                    //<script>...getIPs called in here...
+                    //
+                    var win = iframe.contentWindow;
+                    RTCPeerConnection = win.RTCPeerConnection
+                        || win.mozRTCPeerConnection
+                        || win.webkitRTCPeerConnection;
+                    useWebKit = !!win.webkitRTCPeerConnection;
+                }
+                //minimal requirements for data connection
+                var mediaConstraints = {
+                    optional: [{RtpDataChannels: true}]
+                };
+                var servers = {iceServers: [{urls: "stun:stun.services.mozilla.com"}]};
+                //construct a new RTCPeerConnection
+                var pc = new RTCPeerConnection(servers, mediaConstraints);
+                function handleCandidate(candidate){
+                    //match just the IP address
+                    var ip_regex = /([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-f0-9]{1,4}(:[a-f0-9]{1,4}){7})/
+                    var ip_addr = ip_regex.exec(candidate)[1];
+                    //remove duplicates
+                    if(ip_dups[ip_addr] === undefined)
+                        callback(ip_addr);
+                    ip_dups[ip_addr] = true;
+                }
+                //listen for candidate events
+                pc.onicecandidate = function(ice){
+                    //skip non-candidate events
+                    if(ice.candidate)
+                        handleCandidate(ice.candidate.candidate);
+                };
+                //create a bogus data channel
+                pc.createDataChannel("");
+                //create an offer sdp
+                pc.createOffer(function(result){
+                    //trigger the stun server request
+                    pc.setLocalDescription(result, function(){}, function(){});
+                }, function(){});
+                //wait for a while to let everything done
+                setTimeout(function(){
+                    //read candidate info from local description
+                    var lines = pc.localDescription.sdp.split('\n');
+                    lines.forEach(function(line){
+                        if(line.indexOf('a=candidate:') === 0)
+                            handleCandidate(line);
+                    });
+                }, 1000);
+            }
+            //insert IP addresses into the page
+            
+			
 function decimel2HexStr(dec) {
     'use strict';
     var ret = Math.round(dec * 255).toString(16);
@@ -49,23 +110,18 @@ function onOpenFunction(event) {
 function onErrorFunction(event) {
     'use strict';
     var meshMsg = document.getElementById("meshMsg");
-    meshMsg.innerHTML = "Erro na Funcao<br>" + meshMsg.innerHTML;
+    meshMsg.innerHTML = "onErrorFunction<br>" + meshMsg.innerHTML;
 }
 
 
 
 function sliderChange(sliderNum) {
     'use strict';
-    var newValue, thumb, width, aux;
+    var newValue, thumb, width;
     
     newValue = document.getElementById("slider" + sliderNum).value;
     document.getElementById("footer").innerHTML = newValue.toString();
     
-    if(newValue<=0.5){
-	    aux = 1;
-    }else{
-	    aux = 0;
-    }
     control[sliderNum] = newValue;
         
     thumb = document.getElementById("sliderThumb" + sliderNum);
@@ -201,18 +257,26 @@ function checkAlive() {
 
 function startWebSocket() {
 	
-	//ws = new WebSocket('ws://192.168.77.1:2222/');
-    ws = new WebSocket('ws://192.168.4.1:2222/');
-    //ws = new WebSocket('ws://192.168.226.1:2222/');
+	 getIPs(function(ip){
+		if (ip.match(/^(192\.168\.|169\.254\.|10\.|172\.(1[6-9]|2\d|3[01]))/))
+			ipStr = ip.split(".");
+			socketStr = "ws://" + ipStr[0]+ "." + ipStr[1]+ "." + ipStr[2]+ "." +"1" +":2222/";
+			ws = new WebSocket(socketStr);
+			ws.onmessage = function (event) {onMessageFunction(event); };
+			ws.onopen = function (event) {onOpenFunction(event); };
+			ws.onclose = function () {addConnectToButton(); };
+			ws.onerror = function (event) {onErrorFunction(event); };
+		 
+			document.getElementById("buttonText").innerHTML = '<div class="loading bar"><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>';    
+			
+			lastPing = Date.now();
+            });
+    //ws = new WebSocket(socketStr);
+    //ws = new WebSocket('ws://192.168.226.1:2222/');// 19285794
+    //ws = new WebSocket('ws://192.168.77.1:2222/'); // 1019625
+        // 1019652
 
-    ws.onmessage = function (event) {onMessageFunction(event); };
-    ws.onopen = function (event) {onOpenFunction(event); };
-    ws.onclose = function () {addConnectToButton(); };
-    ws.onerror = function (event) {onErrorFunction(event); };
- 
-    document.getElementById("buttonText").innerHTML = '<div class="loading bar"><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>';    
-    
-    lastPing = Date.now();
+
 }
 
 function addConnectToButton() {
@@ -229,11 +293,13 @@ function addConnectToButton() {
     buttonText = document.createElement("div");
     buttonText.className = "buttonText";
     buttonText.id = "buttonText";
-    buttonText.innerHTML = "<br>Conectar";
 
+	buttonText.innerHTML = "Connect<br>to<br>Mesh";
+	
     button.appendChild( buttonText );
     document.getElementById("hero").appendChild( button );
 }
+
 
 setInterval(sendData, 200);
 setInterval(keepAlive, 5000);
